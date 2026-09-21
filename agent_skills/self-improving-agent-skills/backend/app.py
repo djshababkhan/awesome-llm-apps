@@ -105,11 +105,24 @@ def parse_skill_frontmatter(content: str) -> dict:
             return {}
         frontmatter = parts[1].strip()
         metadata = {}
+        curr_key = None
+        curr_val = []
         for line in frontmatter.split("\n"):
+            raw_line = line
             line = line.strip()
-            if ":" in line and not line.startswith(" "):
+            if not line:
+                continue
+            if ":" in line and not line.startswith(" ") and not line.startswith("-"):
+                if curr_key:
+                    metadata[curr_key] = " ".join(curr_val).strip().strip('"').strip("'")
                 key, value = line.split(":", 1)
-                metadata[key.strip()] = value.strip().strip('"')
+                curr_key = key.strip()
+                val = value.strip()
+                curr_val = [val] if val and val not in (">", "|", ">-", "|-") else []
+            elif curr_key and (raw_line.startswith("  ") or raw_line.startswith("\t")):
+                curr_val.append(line)
+        if curr_key:
+            metadata[curr_key] = " ".join(curr_val).strip().strip('"').strip("'")
         return metadata
     except Exception:
         return {}
@@ -476,20 +489,39 @@ async def cleanup_temp_dir(temp_dir: str):
 
 @app.get("/api/examples")
 async def list_examples():
-    """List available example skills"""
-    # Sibling skills in this repo double as examples — the app demos on real
-    # skills (e.g. project-graveyard), not on toy prompt files.
-    examples_dir = os.path.join(os.path.dirname(__file__), "..", "..")
+    """List all agent skills available in the repository with full metadata and status"""
+    skills_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
     examples = []
-    if os.path.exists(examples_dir):
-        for name in sorted(os.listdir(examples_dir)):
-            skill_dir = os.path.join(examples_dir, name)
+    if os.path.exists(skills_dir):
+        for name in sorted(os.listdir(skills_dir)):
+            skill_dir = os.path.join(skills_dir, name)
             skill_md_path = os.path.join(skill_dir, "SKILL.md")
             if os.path.isdir(skill_dir) and os.path.exists(skill_md_path):
-                with open(skill_md_path, "r") as f:
+                with open(skill_md_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 metadata = parse_skill_frontmatter(content)
-                examples.append({"name": metadata.get("name", name), "description": metadata.get("description", ""), "path": name})
+
+                # Collect files in skill directory
+                file_count = 0
+                has_scripts = os.path.exists(os.path.join(skill_dir, "scripts"))
+                has_references = os.path.exists(os.path.join(skill_dir, "references"))
+                has_evals = os.path.exists(os.path.join(skills_dir, "evals", name))
+
+                for _, _, files in os.walk(skill_dir):
+                    file_count += len(files)
+
+                examples.append({
+                    "id": name,
+                    "name": metadata.get("name", name),
+                    "description": metadata.get("description", ""),
+                    "path": name,
+                    "metadata": metadata,
+                    "file_count": file_count,
+                    "has_scripts": has_scripts,
+                    "has_references": has_references,
+                    "has_evals": has_evals,
+                    "is_self_improving": name == "self-improving-agent-skills"
+                })
     return {"examples": examples}
 
 
