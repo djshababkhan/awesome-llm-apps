@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { Upload, FileText, Loader2, Sparkles, FolderOpen } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Upload, FileText, Loader2, Sparkles, FolderOpen, Bot, CheckCircle, Code, BookOpen, Layers } from "lucide-react";
 
 interface UploadStepProps {
   onComplete: (
@@ -15,19 +15,6 @@ interface UploadStepProps {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8891";
 
-const EXAMPLE_SKILLS = [
-  {
-    name: "Code Reviewer",
-    description: "Reviews code for security, performance, and best practices",
-    path: "code-reviewer",
-  },
-  {
-    name: "Content Writer",
-    description: "Writes marketing copy for landing pages and emails",
-    path: "content-writer",
-  },
-];
-
 export default function UploadStep({ onComplete }: UploadStepProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -36,7 +23,29 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
   const [fileList, setFileList] = useState<string[]>([]);
   const [metadata, setMetadata] = useState<any>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<any[]>([]);
+  const [selectedSkillPath, setSelectedSkillPath] = useState<string | null>(null);
+  const [isLoadingSkills, setIsLoadingSkills] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchAvailableSkills();
+  }, []);
+
+  const fetchAvailableSkills = async () => {
+    setIsLoadingSkills(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/examples`);
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableSkills(data.examples || []);
+      }
+    } catch (e) {
+      console.error("Failed to fetch available skills:", e);
+    } finally {
+      setIsLoadingSkills(false);
+    }
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -151,12 +160,13 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
       alert("Please enter your Google API key first.");
       return;
     }
+    setSelectedSkillPath(examplePath);
     setIsUploading(true);
     try {
       const loadResponse = await fetch(`${API_BASE}/api/examples/${examplePath}/load`, {
         method: "POST",
       });
-      if (!loadResponse.ok) throw new Error("Failed to load example");
+      if (!loadResponse.ok) throw new Error("Failed to load skill");
       const loadData = await loadResponse.json();
       setSessionId(loadData.session_id);
       setFileList(loadData.file_list);
@@ -176,11 +186,12 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
       const analyzeData = await analyzeResponse.json();
       onComplete(loadData.session_id, apiKey, loadData.metadata, analyzeData.scenarios, analyzeData.evals);
     } catch (error: any) {
-      alert(error.message || "Failed to load example skill.");
+      alert(error.message || "Failed to load skill.");
       setSessionId(null);
     } finally {
       setIsUploading(false);
       setIsAnalyzing(false);
+      setSelectedSkillPath(null);
     }
   };
 
@@ -254,30 +265,99 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
             </label>
           </div>
 
-          <div>
-            <p className="text-center text-zinc-500 mb-4">
-              {isAnalyzing ? "Analyzing with ADK agents..." : "Or try an example skill:"}
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              {EXAMPLE_SKILLS.map((skill) => (
-                <button
-                  key={skill.path}
-                  onClick={() => handleExampleSelect(skill.path)}
-                  disabled={isUploading || isAnalyzing || !apiKey}
-                  className={`glass rounded-xl p-6 text-left transition-all ${
-                    apiKey && !isUploading && !isAnalyzing
-                      ? "hover:border-violet-500 hover:scale-105 cursor-pointer"
-                      : "opacity-50 cursor-not-allowed"
-                  }`}
-                >
-                  <h4 className="font-semibold mb-2 flex items-center gap-2">
-                    {skill.name}
-                    {isAnalyzing && <Loader2 className="w-4 h-4 animate-spin text-violet-500" />}
-                  </h4>
-                  <p className="text-sm text-zinc-400">{skill.description}</p>
-                </button>
-              ))}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <Bot className="w-5 h-5 text-violet-500" />
+                Repository Agent Skills Dashboard
+              </h3>
+              <span className="text-xs px-3 py-1 bg-violet-500/10 text-violet-400 rounded-full border border-violet-500/20 font-medium">
+                {availableSkills.length} Skills Detected
+              </span>
             </div>
+
+            <p className="text-sm text-zinc-400">
+              Select any agent skill below to inspect, generate scenarios, and run self-improvement optimization:
+            </p>
+
+            {isLoadingSkills ? (
+              <div className="text-center py-8 glass rounded-xl">
+                <Loader2 className="w-8 h-8 animate-spin mx-auto text-violet-500 mb-2" />
+                <p className="text-sm text-zinc-400">Loading skills dashboard...</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {availableSkills.map((skill) => {
+                  const isSelectedLoading = selectedSkillPath === skill.path && (isUploading || isAnalyzing);
+                  return (
+                    <div
+                      key={skill.path}
+                      className={`glass rounded-xl p-5 border text-left transition-all flex flex-col justify-between ${
+                        selectedSkillPath === skill.path
+                          ? "border-violet-500 bg-violet-500/5"
+                          : "border-zinc-800 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <h4 className="font-bold text-base flex items-center gap-2 text-zinc-100">
+                            {skill.name}
+                          </h4>
+                          <span className="text-xs px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded font-mono">
+                            {skill.file_count} files
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-400 line-clamp-3 mb-4 leading-relaxed">
+                          {skill.description || "No description provided."}
+                        </p>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2 mb-4 text-[11px] text-zinc-400">
+                          {skill.has_evals && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded border border-emerald-500/20">
+                              <CheckCircle className="w-3 h-3" /> Evals
+                            </span>
+                          )}
+                          {skill.has_scripts && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded border border-blue-500/20">
+                              <Code className="w-3 h-3" /> Scripts
+                            </span>
+                          )}
+                          {skill.has_references && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-500/10 text-violet-400 rounded border border-violet-500/20">
+                              <BookOpen className="w-3 h-3" /> Refs
+                            </span>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={() => handleExampleSelect(skill.path)}
+                          disabled={isUploading || isAnalyzing || !apiKey}
+                          className={`w-full py-2.5 px-4 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
+                            apiKey && !isUploading && !isAnalyzing
+                              ? "bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-600/20 cursor-pointer"
+                              : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                          }`}
+                        >
+                          {isSelectedLoading ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-white" />
+                              Analyzing Skill...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              Select & Optimize Skill
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </>
       ) : (
