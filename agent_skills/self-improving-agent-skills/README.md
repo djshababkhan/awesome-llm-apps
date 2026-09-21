@@ -94,15 +94,29 @@ npm run dev
 # App runs on http://localhost:3000
 ```
 
-### Usage
+### How to Run the Dashboard
 
 1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
-2. Open http://localhost:3000
-3. Upload a skill folder as a .zip file (or try an example)
-4. Enter your Gemini API key
-5. Review and edit the generated test scenarios and evaluation criteria
-6. Click "Start Optimization" and watch the agents collaborate to improve your skill
-7. Download your improved skill when complete
+2. **Start Backend Server:**
+   ```bash
+   cd backend
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   python app.py
+   ```
+3. **Start Frontend App:**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+4. Open **http://localhost:3000** in your browser
+5. Enter your Gemini API key in the UI
+6. Select any detected skill from the **Repository Agent Skills Dashboard** (or upload your own skill as a .zip or folder)
+7. Review and edit the generated test scenarios and evaluation criteria
+8. Click **"Start Optimization"** and watch the agents collaborate to improve your skill
+9. Download your improved skill when complete
 
 ## Skill Format
 
