@@ -79,6 +79,36 @@ def test_scenario_index_advances():
     assert indexes == [1, 2], f"expected indexes to advance 1..2, got {indexes}"
 
 
+def test_optimize_wires_its_callback_to_progress():
+    """The caller's callback must receive progress, not just round results.
+
+    The RecordingOptimizer above sets _emit by hand, so only running the real
+    optimize() proves that it wires the callback up for itself.
+    """
+    opt = RecordingOptimizer()
+    opt._emit = None
+    received = []
+
+    async def callback(event):
+        received.append(event)
+
+    asyncio.run(
+        opt.optimize(
+            {"SKILL.md": "# skill"},
+            SCENARIOS,
+            EVALS,
+            max_rounds=1,
+            callback=callback,
+        )
+    )
+
+    progress = [e for e in received if e["type"] == "progress"]
+    assert progress, (
+        f"optimize() never forwarded progress to the callback; "
+        f"got event types {[e['type'] for e in received]}"
+    )
+
+
 def test_no_emitter_is_safe():
     """A direct caller with no emitter must not crash."""
     opt = RecordingOptimizer()
@@ -91,6 +121,7 @@ def main():
         test_emits_progress_for_every_scenario,
         test_progress_identifies_which_scenario,
         test_scenario_index_advances,
+        test_optimize_wires_its_callback_to_progress,
         test_no_emitter_is_safe,
     ]
 
