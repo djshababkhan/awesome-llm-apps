@@ -6,6 +6,7 @@
   Mutator: makes one targeted fix per round
 """
 
+import asyncio
 import json
 from typing import Callable, List, Optional
 
@@ -18,6 +19,11 @@ from model_provider import DEFAULT_GEMINI_MODEL, GEMINI, OLLAMA, ProviderConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+
+# Scenarios are scored in parallel, but not without limit: a large skill would
+# otherwise open a request per scenario at once and hit provider rate limits.
+MAX_CONCURRENT_SCENARIOS = 4
 
 
 # -- Pydantic schemas for structured agent output ----------------------------
@@ -369,49 +375,32 @@ class SkillOptimizer:
             await self._emit({"type": "progress", "data": {"phase": phase, **data}})
 
     async def _score_skill(self, skill_md, scenarios, evals):
-        """Executor runs all scenarios, then scores outputs."""
+        """Executor runs every scenario, then scores the outputs.
+
+        Scenarios are independent, so they run concurrently: a round otherwise
+        waits for two model calls per scenario in series, which is the bulk of
+        a run's wall-clock time.
+        """
+        limit = asyncio.Semaphore(MAX_CONCURRENT_SCENARIOS)
+
+        async def run(index, sc):
+            async with limit:
+                return await self._score_scenario(
+                    skill_md, sc, index, len(scenarios), evals
+                )
+
+        scored = await asyncio.gather(
+            *(run(index, sc) for index, sc in enumerate(scenarios, start=1))
+        )
+
         all_results = []
         total_passed = 0
         total_checks = 0
         per_eval = {e["id"]: {"passed": 0, "total": 0} for e in evals}
 
-        for index, sc in enumerate(scenarios, start=1):
-            if self._should_stop():
-                break
-
-            await self._progress(
-                "executing",
-                scenario_index=index,
-                scenario_total=len(scenarios),
-                scenario_name=sc.get("name", f"Scenario {index}"),
-            )
-
-            # Executor runs the skill (free-form text)
-            output = await self._ask(
-                self.executor,
-                f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
-            )
-            await self._progress(
-                "scoring",
-                scenario_index=index,
-                scenario_total=len(scenarios),
-                scenario_name=sc.get("name", f"Scenario {index}"),
-            )
-
-            # Executor scores the output (JSON)
-            scoring = await self._ask_json(
-                self.executor,
-                (
-                    f"Evaluate this output against the criteria.\n\n"
-                    f"Input: {sc['input']}\n\n"
-                    f"Output: {output}\n\n"
-                    f"Criteria:\n{json.dumps(evals, indent=2)}\n\n"
-                    f"Return JSON: {{\"results\": [{{\"eval_id\": 1, \"passed\": true, \"reason\": \"...\"}}]}}"
-                ),
-                fallback={"results": []},
-            )
-            scores = scoring.get("results", []) if isinstance(scoring, dict) else scoring
-
+        # Aggregated in scenario order, not completion order, so a run's details
+        # read the same however the calls happened to interleave.
+        for sc, scores in zip(scenarios, scored):
             for s in scores:
                 eid = s.get("eval_id")
                 passed = s.get("passed", False)
@@ -433,6 +422,43 @@ class SkillOptimizer:
             ],
             "details": all_results,
         }
+
+    async def _score_scenario(self, skill_md, sc, index, total, evals):
+        """Runs one scenario and scores its output, returning the raw scores."""
+        if self._should_stop():
+            return []
+
+        name = sc.get("name", f"Scenario {index}")
+        await self._progress(
+            "executing", scenario_index=index, scenario_total=total, scenario_name=name
+        )
+
+        # Executor runs the skill (free-form text)
+        output = await self._ask(
+            self.executor,
+            f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
+        )
+
+        if self._should_stop():
+            return []
+
+        await self._progress(
+            "scoring", scenario_index=index, scenario_total=total, scenario_name=name
+        )
+
+        # Executor scores the output (JSON)
+        scoring = await self._ask_json(
+            self.executor,
+            (
+                f"Evaluate this output against the criteria.\n\n"
+                f"Input: {sc['input']}\n\n"
+                f"Output: {output}\n\n"
+                f"Criteria:\n{json.dumps(evals, indent=2)}\n\n"
+                f"Return JSON: {{\"results\": [{{\"eval_id\": 1, \"passed\": true, \"reason\": \"...\"}}]}}"
+            ),
+            fallback={"results": []},
+        )
+        return scoring.get("results", []) if isinstance(scoring, dict) else scoring
 
     async def _analyze_failures(self, skill_md, scenarios, evals, details):
         """Analyst agent diagnoses the worst failures."""
