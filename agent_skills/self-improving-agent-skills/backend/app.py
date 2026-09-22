@@ -18,6 +18,7 @@ import traceback
 from adk_optimizer import SkillOptimizer
 from config import load_env_file
 from model_provider import describe_provider, resolve_provider
+from session_store import forget_session, load_sessions, save_session
 from service_control import (
     VALID_ACTIONS,
     is_supervised,
@@ -55,12 +56,17 @@ async def _cleanup_expired_sessions():
         ]
         for sid in expired:
             del sessions[sid]
+            forget_session(sid)
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired session(s)")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    restored = load_sessions()
+    if restored:
+        sessions.update(restored)
+        logger.info(f"Restored {len(restored)} session(s) from disk.")
     logger.info("Starting background session cleanup task via lifespan.")
     cleanup_task = asyncio.create_task(_cleanup_expired_sessions())
     yield
@@ -458,10 +464,13 @@ async def start_optimization(session_id: str, request: StartRequest):
                 }
             session["current_skill_md"] = result["improved_skill_md"]
             session["status"] = "complete"
+            # A finished run is expensive to reproduce; a restart must not lose it.
+            save_session(session_id, session)
         except Exception as e:
             logger.error(f"Optimization error: {traceback.format_exc()}")
             session["status"] = "error"
             session["error"] = str(e)
+            save_session(session_id, session)
             if "event_queue" in session:
                 await session["event_queue"].put({"type": "error", "data": {"message": str(e)}})
                 await session["event_queue"].put(None)
@@ -478,6 +487,7 @@ async def stop_optimization(session_id: str):
     session = sessions[session_id]
     session["stop_requested"] = True
     session["status"] = "stopped"
+    save_session(session_id, session)
     if "event_queue" in session:
         await session["event_queue"].put(None)
     return {"status": "stopped"}
