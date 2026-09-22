@@ -7,12 +7,13 @@
 """
 
 import json
-import os
 from typing import Callable, List, Optional
 
 from pydantic import BaseModel, Field
 
+from google import genai
 from google.adk.agents import Agent
+from google.adk.models import Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -41,15 +42,17 @@ class SkillMutation(BaseModel):
 
 class SkillOptimizer:
     def __init__(self, api_key: str, model: str = "gemini-3-flash-preview"):
-        # ADK agents authenticate via this env var
-        os.environ["GOOGLE_API_KEY"] = api_key
+        # The credential is held on this instance rather than in os.environ. The
+        # backend builds one optimizer per request, and a process-global key
+        # would let concurrent runs overwrite each other's credentials.
+        self._client = genai.Client(api_key=api_key)
         self.model = model
         self._session_service = InMemorySessionService()
         self._call_id = 0
 
         self.executor = Agent(
             name="executor",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You are a versatile skill execution agent. You have three modes:\n\n"
                 "1. EXECUTE MODE: Given a skill's instructions and a user request, "
@@ -63,7 +66,7 @@ class SkillOptimizer:
         )
         self.analyst = Agent(
             name="analyst",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You diagnose why agent skill evaluations fail. "
                 "Given failed eval results, identify the root cause and suggest "
@@ -74,7 +77,7 @@ class SkillOptimizer:
         )
         self.mutator = Agent(
             name="mutator",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You edit agent skill files. Given a SKILL.md and a diagnosis, "
                 "make exactly ONE targeted change. Keep the YAML frontmatter and "
