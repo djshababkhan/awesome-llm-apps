@@ -60,7 +60,33 @@ self-improving-agent-skills/
 
 ## Quick Start
 
-### Backend Setup
+### One Command (recommended)
+
+```bash
+./start.sh
+```
+
+This installs any missing dependencies (Python venv + npm packages), starts the backend,
+waits until it reports healthy, then starts the frontend. Press **Ctrl+C** to stop both.
+
+Then open **http://localhost:3000** and paste in a Gemini API key from
+[Google AI Studio](https://aistudio.google.com/apikey).
+
+Useful variants:
+
+```bash
+./start.sh --setup-only                        # install dependencies without starting servers
+BACKEND_PORT=8892 FRONTEND_PORT=3001 ./start.sh  # run on different ports
+```
+
+Requires Python 3.10+ and Node.js 18+. On Windows, use Git Bash or WSL, or follow the
+manual steps below.
+
+### Manual Setup
+
+Prefer to run the two servers yourself? Start them in separate terminals.
+
+#### Backend
 
 ```bash
 cd backend
@@ -72,16 +98,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Set up environment (optional — the app will prompt for your API key in the UI)
-cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
-
 # Run server
 python app.py
 # Server runs on http://localhost:8891
 ```
 
-### Frontend Setup
+#### Frontend
 
 ```bash
 cd frontend
@@ -94,29 +116,16 @@ npm run dev
 # App runs on http://localhost:3000
 ```
 
-### How to Run the Dashboard
+### Using the Dashboard
 
 1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
-2. **Start Backend Server:**
-   ```bash
-   cd backend
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   python app.py
-   ```
-3. **Start Frontend App:**
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-4. Open **http://localhost:3000** in your browser
-5. Enter your Gemini API key in the UI
-6. Select any detected skill from the **Repository Agent Skills Dashboard** (or upload your own skill as a .zip or folder)
-7. Review and edit the generated test scenarios and evaluation criteria
-8. Click **"Start Optimization"** and watch the agents collaborate to improve your skill
-9. Download your improved skill when complete
+2. Run `./start.sh`
+3. Open **http://localhost:3000** in your browser
+4. Enter your Gemini API key in the UI
+5. Select any detected skill from the **Repository Agent Skills Dashboard** (or upload your own skill as a .zip or folder)
+6. Review and edit the generated test scenarios and evaluation criteria
+7. Click **"Start Optimization"** and watch the agents collaborate to improve your skill
+8. Download your improved skill when complete
 
 ## Skill Format
 
