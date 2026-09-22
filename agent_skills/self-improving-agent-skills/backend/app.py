@@ -16,6 +16,9 @@ import re
 import logging
 import traceback
 from adk_optimizer import SkillOptimizer
+from config import has_env_key, load_env_file, resolve_api_key
+
+load_env_file()
 from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO)
@@ -76,7 +79,7 @@ app.add_middleware(
 
 class AnalyzeRequest(BaseModel):
     session_id: str
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = ""
 
 
 class SessionConfig(BaseModel):
@@ -87,12 +90,14 @@ class SessionConfig(BaseModel):
 
 class RegenerateRequest(BaseModel):
     session_id: str
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = ""
 
 
 class StartRequest(BaseModel):
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = ""
     max_rounds: Optional[int] = Field(default=20, gt=0, le=50)
+    # Optimization stops as soon as this pass rate is reached.
+    target_pass_rate: Optional[float] = Field(default=100.0, gt=0, le=100)
 
 
 def parse_skill_frontmatter(content: str) -> dict:
@@ -259,8 +264,13 @@ async def analyze_skill(request: AnalyzeRequest):
     if request.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     session = sessions[request.session_id]
+
+    api_key = resolve_api_key(request.gemini_api_key)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="No Gemini API key. Add GOOGLE_API_KEY to backend/.env (see .env.example) or enter a key in the app.")
+
     try:
-        optimizer = SkillOptimizer(api_key=request.gemini_api_key)
+        optimizer = SkillOptimizer(api_key=api_key)
         analysis = await optimizer.analyze_skill(session["skill_files"])
         session["scenarios"] = analysis["scenarios"]
         session["evals"] = analysis["evals"]
@@ -331,11 +341,15 @@ async def start_optimization(session_id: str, request: StartRequest):
     if session.get("status") == "running":
         raise HTTPException(status_code=400, detail="Optimization already running")
 
+    gemini_key = resolve_api_key(request.gemini_api_key)
+    if not gemini_key:
+        raise HTTPException(status_code=400, detail="No Gemini API key. Add GOOGLE_API_KEY to backend/.env (see .env.example) or enter a key in the app.")
+
     session["status"] = "running"
     session["stop_requested"] = False
+    session["activity"] = None
     # Pre-create the event queue so events aren't lost before SSE connects
     session["event_queue"] = asyncio.Queue()
-    gemini_key = request.gemini_api_key
 
     async def run_optimization():
         logger.info(f"Starting optimization for session {session_id}")
@@ -345,7 +359,9 @@ async def start_optimization(session_id: str, request: StartRequest):
             logger.info(f"Callback event: {event['type']}")
             if "event_queue" in session:
                 await session["event_queue"].put(event)
-            if event["type"] == "baseline":
+            if event["type"] == "progress":
+                session["activity"] = event["data"]
+            elif event["type"] == "baseline":
                 session["experiments"].append({
                     "experiment_id": 0,
                     "pass_rate": event["data"].get("score", 0),
@@ -399,9 +415,15 @@ async def start_optimization(session_id: str, request: StartRequest):
                 scenarios=session["scenarios"],
                 evals=session["evals"],
                 max_rounds=request.max_rounds,
+                target_pass_rate=request.target_pass_rate,
+                should_stop=lambda: session.get("stop_requested", False),
                 callback=callback,
             )
-            logger.info(f"Optimization complete: {result['baseline_score']}% -> {result['final_score']}%")
+            logger.info(
+                f"Optimization complete: {result['baseline_score']}% -> "
+                f"{result['final_score']}% "
+                f"({result['rounds_run']} rounds, stopped: {result['stop_reason']})"
+            )
             # Don't overwrite final_result if callback already set it with transformed data
             if not session.get("final_result"):
                 ml = result.get("mutation_log", [])
@@ -559,6 +581,7 @@ async def get_status(session_id: str):
     return {
         "status": session.get("status", "unknown"),
         "experiments": session.get("experiments", []),
+        "activity": session.get("activity"),
         "error": session.get("error"),
         "final_result": session.get("final_result"),
     }
@@ -567,6 +590,12 @@ async def get_status(session_id: str):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/api/config")
+async def get_config():
+    """Lets the UI skip the API key prompt when backend/.env already has one."""
+    return {"has_env_key": has_env_key()}
 
 
 

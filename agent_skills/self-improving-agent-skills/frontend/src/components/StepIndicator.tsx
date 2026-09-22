@@ -15,13 +15,13 @@ const steps = [
 
 export default function StepIndicator({ currentStep }: StepIndicatorProps) {
   return (
-    <div className="flex items-center justify-center gap-4">
+    <div className="flex items-center justify-center gap-1 sm:gap-4">
       {steps.map((step, index) => (
         <div key={step.number} className="flex items-center">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <div
               className={`
-                w-12 h-12 rounded-full flex items-center justify-center font-semibold
+                w-9 h-9 sm:w-12 sm:h-12 shrink-0 rounded-full flex items-center justify-center font-semibold
                 transition-all duration-300
                 ${
                   currentStep > step.number
@@ -33,14 +33,15 @@ export default function StepIndicator({ currentStep }: StepIndicatorProps) {
               `}
             >
               {currentStep > step.number ? (
-                <Check className="w-6 h-6" />
+                <Check className="w-5 h-5 sm:w-6 sm:h-6" />
               ) : (
                 step.number
               )}
             </div>
             <span
               className={`
-                text-sm font-medium transition-colors
+                text-sm font-medium transition-colors whitespace-nowrap
+                ${currentStep === step.number ? "inline" : "hidden sm:inline"}
                 ${
                   currentStep >= step.number
                     ? "text-white"
@@ -55,7 +56,7 @@ export default function StepIndicator({ currentStep }: StepIndicatorProps) {
           {index < steps.length - 1 && (
             <div
               className={`
-                w-16 h-0.5 mx-4 transition-colors
+                w-4 sm:w-16 h-0.5 mx-1 sm:mx-4 shrink-0 transition-colors
                 ${
                   currentStep > step.number
                     ? "bg-gradient-to-r from-violet-500 to-purple-500"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import BackendStatus from "@/components/BackendStatus";
 import StepIndicator from "@/components/StepIndicator";
 import UploadStep from "@/components/UploadStep";
 import ConfigStep from "@/components/ConfigStep";
@@ -65,6 +66,10 @@ export default function Home() {
             <span className="px-3 py-1 bg-violet-500/10 text-violet-400 dark:text-violet-400 text-violet-600 rounded-full text-xs font-medium border border-violet-500/20">Gemini</span>
             <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 dark:text-emerald-400 text-emerald-600 rounded-full text-xs font-medium border border-emerald-500/20">Multi-Agent</span>
           </div>
+
+          <div className="mt-5 flex justify-center">
+            <BackendStatus />
+          </div>
         </div>
 
         <StepIndicator currentStep={currentStep} />
@@ -93,6 +98,7 @@ export default function Home() {
               scenarios={scenarios}
               evals={evals}
               onComplete={handleOptimizationComplete}
+              onStop={handleStartOver}
             />
           )}
 

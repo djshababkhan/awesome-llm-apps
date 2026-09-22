@@ -62,6 +62,20 @@
   }
 }
 
+@layer base {
+  /* Motion here is informational, so reduce it rather than removing the cue. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
 @layer utilities {
   /* Glass effect - dark */
   html.dark .glass {
@@ -114,6 +128,31 @@
     50% { opacity: 0.5; transform: scale(1.05); }
   }
 
+  /* Liveness signal for the backend status dot. */
+  .live-ping {
+    animation: live-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes live-ping {
+    0% { transform: scale(1); opacity: 0.7; }
+    75%, 100% { transform: scale(2.4); opacity: 0; }
+  }
+
+  /* Work is happening but its duration is unknown. */
+  .indeterminate {
+    animation: indeterminate 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+
+  @keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+
+  /* Status text needs a darker tint to stay legible on light surfaces. */
+  html.light .text-emerald-400 { color: #047857 !important; }
+  html.light .text-red-400 { color: #b91c1c !important; }
+  html.light .text-violet-400 { color: #6d28d9 !important; }
+
   /* Light mode overrides for common component patterns */
   html.light .bg-zinc-900 { background-color: #ffffff !important; }
   html.light .bg-zinc-800 { background-color: #f4f4f5 !important; }
@@ -124,6 +163,7 @@
   html.light .text-zinc-500 { color: #52525b !important; }
   html.light .text-white { color: #18181b !important; }
   html.light .text-zinc-300 { color: #3f3f46 !important; }
+  html.light .text-zinc-100 { color: #18181b !important; }
   html.light .text-zinc-200 { color: #27272a !important; }
   html.light .hover\:bg-zinc-700:hover { background-color: #e4e4e7 !important; }
   html.light .hover\:bg-zinc-800:hover { background-color: #f4f4f5 !important; }

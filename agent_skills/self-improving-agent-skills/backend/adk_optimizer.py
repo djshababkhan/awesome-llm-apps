@@ -7,12 +7,13 @@
 """
 
 import json
-import os
 from typing import Callable, List, Optional
 
 from pydantic import BaseModel, Field
 
+from google import genai
 from google.adk.agents import Agent
+from google.adk.models import Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
@@ -41,15 +42,22 @@ class SkillMutation(BaseModel):
 
 class SkillOptimizer:
     def __init__(self, api_key: str, model: str = "gemini-3-flash-preview"):
-        # ADK agents authenticate via this env var
-        os.environ["GOOGLE_API_KEY"] = api_key
+        # The credential is held on this instance rather than in os.environ. The
+        # backend builds one optimizer per request, and a process-global key
+        # would let concurrent runs overwrite each other's credentials.
+        self._client = genai.Client(api_key=api_key)
         self.model = model
         self._session_service = InMemorySessionService()
         self._call_id = 0
+        # Replaced per-run by optimize(); see the should_stop parameter.
+        self._should_stop = lambda: False
+        # Set by optimize() so the long-running helpers can report what they are
+        # doing. Without it the UI sees nothing between round results.
+        self._emit = None
 
         self.executor = Agent(
             name="executor",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You are a versatile skill execution agent. You have three modes:\n\n"
                 "1. EXECUTE MODE: Given a skill's instructions and a user request, "
@@ -63,7 +71,7 @@ class SkillOptimizer:
         )
         self.analyst = Agent(
             name="analyst",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You diagnose why agent skill evaluations fail. "
                 "Given failed eval results, identify the root cause and suggest "
@@ -74,7 +82,7 @@ class SkillOptimizer:
         )
         self.mutator = Agent(
             name="mutator",
-            model=model,
+            model=Gemini(model=model, client=self._client),
             instruction=(
                 "You edit agent skill files. Given a SKILL.md and a diagnosis, "
                 "make exactly ONE targeted change. Keep the YAML frontmatter and "
@@ -132,6 +140,8 @@ class SkillOptimizer:
 
     async def analyze_skill(self, skill_files: dict) -> dict:
         """Generate test scenarios and eval criteria from skill files."""
+        self._emit = emit
+
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
         )
@@ -164,9 +174,13 @@ class SkillOptimizer:
         scenarios: list,
         evals: list,
         max_rounds: int = 5,
+        target_pass_rate: float = 100.0,
+        should_stop: Optional[Callable[[], bool]] = None,
         callback: Optional[Callable] = None,
     ) -> dict:
         """Run the optimization loop with 3 ADK agents."""
+
+        self._should_stop = should_stop or (lambda: False)
 
         async def emit(event):
             if callback:
@@ -195,13 +209,31 @@ class SkillOptimizer:
         })
 
         # -- Rounds -----------------------------------------------------------
+        # A skill that already meets the target needs no mutation; continuing
+        # only burns API calls and risks regressing a passing skill.
+        stop_reason = "max_rounds"
+        if self._should_stop():
+            stop_reason = "stopped"
+        elif baseline_pct >= target_pass_rate:
+            stop_reason = "target_reached"
+
         for rnd in range(1, max_rounds + 1):
+            if stop_reason != "max_rounds":
+                break
+            if self._should_stop():
+                stop_reason = "stopped"
+                break
+
             await emit({"type": "experiment_start", "data": {"round": rnd}})
+
+            await self._progress("analyzing", round=rnd)
 
             # Analyst diagnoses worst failure
             analysis = await self._analyze_failures(
                 current_md, scenarios, evals, baseline["details"]
             )
+
+            await self._progress("mutating", round=rnd)
 
             # Mutator applies fix
             mutation = await self._mutate_skill(current_md, analysis)
@@ -209,6 +241,9 @@ class SkillOptimizer:
 
             # Re-score
             result = await self._score_skill(new_md, scenarios, evals)
+            if self._should_stop():
+                stop_reason = "stopped"
+                break
             new_pct = round(100 * result["passed"] / max(result["total"], 1), 1)
 
             kept = new_pct > baseline_pct
@@ -229,6 +264,9 @@ class SkillOptimizer:
                 baseline_pct = new_pct
 
             score_history.append(baseline_pct)
+
+            if baseline_pct >= target_pass_rate:
+                stop_reason = "target_reached"
 
             await emit({
                 "type": "experiment_result",
@@ -253,6 +291,8 @@ class SkillOptimizer:
                 "improved_skill_md": current_md,
                 "score_history": score_history,
                 "mutation_log": mutation_log,
+                "stop_reason": stop_reason,
+                "rounds_run": len(mutation_log),
                 "strategy_stats": self._strategy_stats(mutation_log),
             },
         })
@@ -263,9 +303,16 @@ class SkillOptimizer:
             "improved_skill_md": current_md,
             "score_history": score_history,
             "mutation_log": mutation_log,
+            "stop_reason": stop_reason,
+            "rounds_run": len(mutation_log),
         }
 
     # -- Internal helpers -----------------------------------------------------
+
+    async def _progress(self, phase: str, **data):
+        """Publishes the current phase so callers can show live activity."""
+        if self._emit:
+            await self._emit({"type": "progress", "data": {"phase": phase, **data}})
 
     async def _score_skill(self, skill_md, scenarios, evals):
         """Executor runs all scenarios, then scores outputs."""
@@ -274,12 +321,29 @@ class SkillOptimizer:
         total_checks = 0
         per_eval = {e["id"]: {"passed": 0, "total": 0} for e in evals}
 
-        for sc in scenarios:
+        for index, sc in enumerate(scenarios, start=1):
+            if self._should_stop():
+                break
+
+            await self._progress(
+                "executing",
+                scenario_index=index,
+                scenario_total=len(scenarios),
+                scenario_name=sc.get("name", f"Scenario {index}"),
+            )
+
             # Executor runs the skill (free-form text)
             output = await self._ask(
                 self.executor,
                 f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
             )
+            await self._progress(
+                "scoring",
+                scenario_index=index,
+                scenario_total=len(scenarios),
+                scenario_name=sc.get("name", f"Scenario {index}"),
+            )
+
             # Executor scores the output (JSON)
             scoring = await self._ask_json(
                 self.executor,
