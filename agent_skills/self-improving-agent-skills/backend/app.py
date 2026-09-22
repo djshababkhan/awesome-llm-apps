@@ -93,6 +93,8 @@ class RegenerateRequest(BaseModel):
 class StartRequest(BaseModel):
     gemini_api_key: str
     max_rounds: Optional[int] = Field(default=20, gt=0, le=50)
+    # Optimization stops as soon as this pass rate is reached.
+    target_pass_rate: Optional[float] = Field(default=100.0, gt=0, le=100)
 
 
 def parse_skill_frontmatter(content: str) -> dict:
@@ -399,9 +401,14 @@ async def start_optimization(session_id: str, request: StartRequest):
                 scenarios=session["scenarios"],
                 evals=session["evals"],
                 max_rounds=request.max_rounds,
+                target_pass_rate=request.target_pass_rate,
                 callback=callback,
             )
-            logger.info(f"Optimization complete: {result['baseline_score']}% -> {result['final_score']}%")
+            logger.info(
+                f"Optimization complete: {result['baseline_score']}% -> "
+                f"{result['final_score']}% "
+                f"({result['rounds_run']} rounds, stopped: {result['stop_reason']})"
+            )
             # Don't overwrite final_result if callback already set it with transformed data
             if not session.get("final_result"):
                 ml = result.get("mutation_log", [])

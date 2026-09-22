@@ -167,6 +167,7 @@ class SkillOptimizer:
         scenarios: list,
         evals: list,
         max_rounds: int = 5,
+        target_pass_rate: float = 100.0,
         callback: Optional[Callable] = None,
     ) -> dict:
         """Run the optimization loop with 3 ADK agents."""
@@ -198,7 +199,16 @@ class SkillOptimizer:
         })
 
         # -- Rounds -----------------------------------------------------------
+        # A skill that already meets the target needs no mutation; continuing
+        # only burns API calls and risks regressing a passing skill.
+        stop_reason = "max_rounds"
+        if baseline_pct >= target_pass_rate:
+            stop_reason = "target_reached"
+
         for rnd in range(1, max_rounds + 1):
+            if stop_reason == "target_reached":
+                break
+
             await emit({"type": "experiment_start", "data": {"round": rnd}})
 
             # Analyst diagnoses worst failure
@@ -233,6 +243,9 @@ class SkillOptimizer:
 
             score_history.append(baseline_pct)
 
+            if baseline_pct >= target_pass_rate:
+                stop_reason = "target_reached"
+
             await emit({
                 "type": "experiment_result",
                 "data": {
@@ -256,6 +269,8 @@ class SkillOptimizer:
                 "improved_skill_md": current_md,
                 "score_history": score_history,
                 "mutation_log": mutation_log,
+                "stop_reason": stop_reason,
+                "rounds_run": len(mutation_log),
                 "strategy_stats": self._strategy_stats(mutation_log),
             },
         })
@@ -266,6 +281,8 @@ class SkillOptimizer:
             "improved_skill_md": current_md,
             "score_history": score_history,
             "mutation_log": mutation_log,
+            "stop_reason": stop_reason,
+            "rounds_run": len(mutation_log),
         }
 
     # -- Internal helpers -----------------------------------------------------
