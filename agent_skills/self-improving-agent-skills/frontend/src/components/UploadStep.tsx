@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Upload, FileText, Loader2, Sparkles, FolderOpen, Bot, CheckCircle, Code, BookOpen, Layers } from "lucide-react";
+import ApiKeyField from "./ApiKeyField";
+import SkillDescription from "./SkillDescription";
 
 interface UploadStepProps {
   onComplete: (
@@ -18,10 +20,32 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8891";
 export default function UploadStep({ onComplete }: UploadStepProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [hasEnvKey, setHasEnvKey] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [fileList, setFileList] = useState<string[]>([]);
   const [metadata, setMetadata] = useState<any>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    fetch(`${API_BASE}/api/config`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data) setHasEnvKey(Boolean(data.has_env_key));
+      })
+      .catch(() => {
+        // Backend unreachable: fall back to asking for a key. BackendStatus
+        // already tells the user the backend is down.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // A key in backend/.env counts, so the UI must not demand one here too.
+  const isKeyReady = hasEnvKey || apiKey.trim().length > 0;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [availableSkills, setAvailableSkills] = useState<any[]>([]);
   const [selectedSkillPath, setSelectedSkillPath] = useState<string | null>(null);
@@ -134,7 +158,7 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
   };
 
   const handleAnalyze = async () => {
-    if (!apiKey || !sessionId) return;
+    if (!isKeyReady || !sessionId) return;
     setIsAnalyzing(true);
     try {
       const response = await fetch(`${API_BASE}/api/analyze`, {
@@ -156,8 +180,8 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
   };
 
   const handleExampleSelect = async (examplePath: string) => {
-    if (!apiKey) {
-      alert("Please enter your Google API key first.");
+    if (!isKeyReady) {
+      alert("Add a Google API key, or set GOOGLE_API_KEY in backend/.env.");
       return;
     }
     setSelectedSkillPath(examplePath);
@@ -250,19 +274,11 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
           </div>
 
           <div className="glass rounded-2xl p-6">
-            <label className="block">
-              <span className="text-sm font-medium text-zinc-400 mb-2 block">Google API Key</span>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your Google API key"
-                className="w-full px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg focus:outline-none focus:border-violet-500 transition-colors"
-              />
-              <span className="text-xs text-zinc-500 mt-1 block">
-                Required for analysis. Stored locally, sent only to the backend.
-              </span>
-            </label>
+            <ApiKeyField
+              value={apiKey}
+              onChange={setApiKey}
+              hasEnvKey={hasEnvKey}
+            />
           </div>
 
           <div className="space-y-4">
@@ -292,7 +308,7 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
                   return (
                     <div
                       key={skill.path}
-                      className={`glass rounded-xl p-5 border text-left transition-all flex flex-col justify-between ${
+                      className={`group relative glass rounded-xl p-6 border text-left transition-all flex flex-col justify-between ${
                         selectedSkillPath === skill.path
                           ? "border-violet-500 bg-violet-500/5"
                           : "border-zinc-800 hover:border-zinc-700"
@@ -300,16 +316,18 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
                     >
                       <div>
                         <div className="flex items-start justify-between gap-2 mb-2">
-                          <h4 className="font-bold text-base flex items-center gap-2 text-zinc-100">
+                          <h4 className="font-bold text-base flex items-center gap-2 text-zinc-100 group-hover:text-white transition-colors">
                             {skill.name}
                           </h4>
                           <span className="text-xs px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded font-mono">
                             {skill.file_count} files
                           </span>
                         </div>
-                        <p className="text-xs text-zinc-400 line-clamp-3 mb-4 leading-relaxed">
-                          {skill.description || "No description provided."}
-                        </p>
+                        <div className="mb-4">
+                          <SkillDescription
+                            text={skill.description || "No description provided."}
+                          />
+                        </div>
                       </div>
 
                       <div>
@@ -333,9 +351,9 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
 
                         <button
                           onClick={() => handleExampleSelect(skill.path)}
-                          disabled={isUploading || isAnalyzing || !apiKey}
+                          disabled={isUploading || isAnalyzing || !isKeyReady}
                           className={`w-full py-2.5 px-4 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
-                            apiKey && !isUploading && !isAnalyzing
+                            isKeyReady && !isUploading && !isAnalyzing
                               ? "bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-600/20 cursor-pointer"
                               : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
                           }`}
@@ -383,21 +401,19 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
           </div>
 
           <div className="glass rounded-2xl p-8">
-            <label className="block mb-4">
-              <span className="text-sm font-medium text-zinc-400 mb-2 block">Google API Key</span>
-              <input
-                type="password"
+            <div className="mb-4">
+              <ApiKeyField
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your Google API key"
-                className="w-full px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg focus:outline-none focus:border-violet-500 transition-colors"
+                onChange={setApiKey}
+                hasEnvKey={hasEnvKey}
+                showHint={false}
               />
-            </label>
+            </div>
             <button
               onClick={handleAnalyze}
-              disabled={!apiKey || isAnalyzing}
+              disabled={!isKeyReady || isAnalyzing}
               className={`w-full py-4 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 ${
-                apiKey && !isAnalyzing ? "gradient-bg hover:scale-105" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                isKeyReady && !isAnalyzing ? "gradient-bg hover:scale-105" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
               }`}
             >
               {isAnalyzing ? (

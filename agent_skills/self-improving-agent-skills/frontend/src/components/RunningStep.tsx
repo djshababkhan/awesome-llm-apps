@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Loader2, StopCircle } from "lucide-react";
+import LiveActivity, { Activity } from "./LiveActivity";
 
 interface RunningStepProps {
   sessionId: string;
@@ -36,6 +37,7 @@ export default function RunningStep({
   const [isRunning, setIsRunning] = useState(false);
   const [currentExperiment, setCurrentExperiment] = useState<string>("");
   const [started, setStarted] = useState(false);
+  const [activity, setActivity] = useState<Activity | null>(null);
 
   useEffect(() => {
     if (!started) {
@@ -69,16 +71,18 @@ export default function RunningStep({
         }
       }
 
-      // Poll for status every 3 seconds
+      // Poll frequently so the live activity line tracks the backend closely.
       const poll = async () => {
         let lastExpCount = 0;
         while (true) {
-          await new Promise((r) => setTimeout(r, 3000));
+          await new Promise((r) => setTimeout(r, 1500));
 
           try {
             const res = await fetch(`${API_BASE}/api/status/${sessionId}`);
             if (!res.ok) continue;
             const data = await res.json();
+
+            setActivity(data.activity ?? null);
 
             // Update experiments if new ones arrived
             if (data.experiments && data.experiments.length > lastExpCount) {
@@ -97,6 +101,7 @@ export default function RunningStep({
             // Check if complete
             if (data.status === "complete" && data.final_result) {
               setIsRunning(false);
+              setActivity(null);
               onComplete(data.final_result);
               return;
             }
@@ -109,6 +114,7 @@ export default function RunningStep({
 
             if (data.status === "stopped") {
               setIsRunning(false);
+              setActivity(null);
               return;
             }
           } catch {
@@ -185,6 +191,14 @@ export default function RunningStep({
               Stop Optimization
             </button>
           )}
+        </div>
+
+        <div className="mb-8">
+          <LiveActivity
+            activity={activity}
+            isRunning={isRunning}
+            stepKey={`${experiments.length}`}
+          />
         </div>
 
         <ResponsiveContainer width="100%" height={300}>

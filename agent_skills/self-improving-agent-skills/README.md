@@ -69,8 +69,20 @@ self-improving-agent-skills/
 This installs any missing dependencies (Python venv + npm packages), starts the backend,
 waits until it reports healthy, then starts the frontend. Press **Ctrl+C** to stop both.
 
-Then open **http://localhost:3000** and paste in a Gemini API key from
-[Google AI Studio](https://aistudio.google.com/apikey).
+### Set your API key once
+
+```bash
+cd backend
+cp .env.example .env
+# paste your key from https://aistudio.google.com/apikey into GOOGLE_API_KEY
+```
+
+With that file in place the app never asks for a key again — it shows
+"API key loaded from backend/.env" instead. `.env` is gitignored, so the key
+stays on your machine. Skip this and the app falls back to asking for a key in
+the UI, which still works.
+
+Then open **http://localhost:3000**.
 
 Useful variants:
 
@@ -251,10 +263,19 @@ def __init__(self, api_key: str, model: str = "gemini-3-flash-preview"):
 
 ### Backend Tests
 
+No test framework or network access needed — each file runs standalone:
+
 ```bash
 cd backend
-python -c "from adk_optimizer import SkillOptimizer; print('OK')"
+for t in test_*.py; do ./venv/bin/python "$t" || exit 1; done
 ```
+
+| File | Covers |
+|------|--------|
+| `test_config.py` | API key resolution between .env and the request |
+| `test_optimizer_auth.py` | Per-instance credentials, no global env mutation |
+| `test_optimizer_stopping.py` | Target pass rate and stop-signal handling |
+| `test_progress.py` | Live progress events during scoring |
 
 ### Frontend Build
 

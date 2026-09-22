@@ -51,6 +51,9 @@ class SkillOptimizer:
         self._call_id = 0
         # Replaced per-run by optimize(); see the should_stop parameter.
         self._should_stop = lambda: False
+        # Set by optimize() so the long-running helpers can report what they are
+        # doing. Without it the UI sees nothing between round results.
+        self._emit = None
 
         self.executor = Agent(
             name="executor",
@@ -137,6 +140,8 @@ class SkillOptimizer:
 
     async def analyze_skill(self, skill_files: dict) -> dict:
         """Generate test scenarios and eval criteria from skill files."""
+        self._emit = emit
+
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
         )
@@ -221,10 +226,14 @@ class SkillOptimizer:
 
             await emit({"type": "experiment_start", "data": {"round": rnd}})
 
+            await self._progress("analyzing", round=rnd)
+
             # Analyst diagnoses worst failure
             analysis = await self._analyze_failures(
                 current_md, scenarios, evals, baseline["details"]
             )
+
+            await self._progress("mutating", round=rnd)
 
             # Mutator applies fix
             mutation = await self._mutate_skill(current_md, analysis)
@@ -300,6 +309,11 @@ class SkillOptimizer:
 
     # -- Internal helpers -----------------------------------------------------
 
+    async def _progress(self, phase: str, **data):
+        """Publishes the current phase so callers can show live activity."""
+        if self._emit:
+            await self._emit({"type": "progress", "data": {"phase": phase, **data}})
+
     async def _score_skill(self, skill_md, scenarios, evals):
         """Executor runs all scenarios, then scores outputs."""
         all_results = []
@@ -307,14 +321,29 @@ class SkillOptimizer:
         total_checks = 0
         per_eval = {e["id"]: {"passed": 0, "total": 0} for e in evals}
 
-        for sc in scenarios:
+        for index, sc in enumerate(scenarios, start=1):
             if self._should_stop():
                 break
+
+            await self._progress(
+                "executing",
+                scenario_index=index,
+                scenario_total=len(scenarios),
+                scenario_name=sc.get("name", f"Scenario {index}"),
+            )
+
             # Executor runs the skill (free-form text)
             output = await self._ask(
                 self.executor,
                 f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
             )
+            await self._progress(
+                "scoring",
+                scenario_index=index,
+                scenario_total=len(scenarios),
+                scenario_name=sc.get("name", f"Scenario {index}"),
+            )
+
             # Executor scores the output (JSON)
             scoring = await self._ask_json(
                 self.executor,
