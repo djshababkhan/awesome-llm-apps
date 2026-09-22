@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import BackendStatus from "@/components/BackendStatus";
+import ServiceControls from "@/components/ServiceControls";
 import StepIndicator from "@/components/StepIndicator";
 import UploadStep from "@/components/UploadStep";
 import ConfigStep from "@/components/ConfigStep";
@@ -67,8 +68,9 @@ export default function Home() {
             <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 dark:text-emerald-400 text-emerald-600 rounded-full text-xs font-medium border border-emerald-500/20">Multi-Agent</span>
           </div>
 
-          <div className="mt-5 flex justify-center">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
             <BackendStatus />
+            <ServiceControls />
           </div>
         </div>
 

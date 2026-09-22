@@ -69,6 +69,22 @@ self-improving-agent-skills/
 This installs any missing dependencies (Python venv + npm packages), starts the backend,
 waits until it reports healthy, then starts the frontend. Press **Ctrl+C** to stop both.
 
+While it runs, `start.sh` also supervises both servers, which is what powers the
+**Restart** and **Shutdown** buttons in the dashboard header.
+
+### Restarting from the dashboard
+
+The header next to the backend status dot has two buttons:
+
+- **Restart** — stops both servers and starts them again, then reloads the page.
+- **Shutdown** — stops both servers. Run `./start.sh` again to bring them back.
+
+Both ask for confirmation first. A server cannot restart the process serving your
+click, so the backend writes the request to `.run/request` and the supervisor loop
+in `start.sh` does the actual work. That means the buttons only work when the stack
+was launched with `./start.sh` — start the servers by hand and the buttons are
+disabled, with a note saying why.
+
 ### Set your API key once
 
 ```bash

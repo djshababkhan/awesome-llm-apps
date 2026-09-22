@@ -7,6 +7,9 @@
 #   ./start.sh --setup-only    # install dependencies and exit
 #
 # Override ports with BACKEND_PORT / FRONTEND_PORT. Ctrl+C stops both servers.
+#
+# While running, this script supervises both servers: the dashboard's restart and
+# shutdown buttons drop a request in .run/request, which the loop below picks up.
 
 set -euo pipefail
 
@@ -25,6 +28,12 @@ readonly BACKEND_PORT="${BACKEND_PORT:-8891}"
 readonly FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 readonly HEALTH_TIMEOUT_SECONDS=60
 readonly SHUTDOWN_GRACE_SECONDS=5
+readonly PORT_RELEASE_TIMEOUT_SECONDS=10
+
+# Shared with backend/service_control.py, which writes the request file.
+readonly RUN_DIR="$ROOT_DIR/.run"
+readonly SUPERVISOR_PID_FILE="$RUN_DIR/supervisor.pid"
+readonly REQUEST_FILE="$RUN_DIR/request"
 
 backend_pid=""
 frontend_pid=""
@@ -45,10 +54,7 @@ is_running() {
   [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null
 }
 
-cleanup() {
-  trap - INT TERM EXIT
-  log "Shutting down..."
-
+stop_servers() {
   signal_tree TERM "$frontend_pid"
   signal_tree TERM "$backend_pid"
 
@@ -62,6 +68,15 @@ cleanup() {
   is_running "$backend_pid" && signal_tree KILL "$backend_pid" || true
 
   wait 2>/dev/null || true
+  backend_pid=""
+  frontend_pid=""
+}
+
+cleanup() {
+  trap - INT TERM EXIT
+  log "Shutting down..."
+  stop_servers
+  rm -f "$SUPERVISOR_PID_FILE" "$REQUEST_FILE"
 }
 
 check_prerequisites() {
@@ -116,14 +131,29 @@ wait_for_backend() {
   for ((i = 0; i < HEALTH_TIMEOUT_SECONDS; i++)); do
     if curl --silent --fail "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
       log "Backend ready on http://localhost:$BACKEND_PORT"
-      return
+      return 0
     fi
     if ! kill -0 "$backend_pid" 2>/dev/null; then
-      die "Backend exited during startup. Check the output above for the cause."
+      warn "Backend exited during startup. Check the output above for the cause."
+      return 1
     fi
     sleep 1
   done
-  die "Backend did not respond within ${HEALTH_TIMEOUT_SECONDS}s."
+  warn "Backend did not respond within ${HEALTH_TIMEOUT_SECONDS}s."
+  return 1
+}
+
+# A just-killed server can hold its port for a moment; restarting into it would
+# fail or, worse, silently land the frontend on a different port.
+wait_for_ports_free() {
+  for ((i = 0; i < PORT_RELEASE_TIMEOUT_SECONDS; i++)); do
+    if ! is_port_in_use "$BACKEND_PORT" && ! is_port_in_use "$FRONTEND_PORT"; then
+      return 0
+    fi
+    sleep 1
+  done
+  warn "Ports $BACKEND_PORT/$FRONTEND_PORT are still busy after ${PORT_RELEASE_TIMEOUT_SECONDS}s."
+  return 1
 }
 
 start_backend() {
@@ -137,6 +167,55 @@ start_frontend() {
   NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT" \
     npm run dev --prefix "$FRONTEND_DIR" -- --port "$FRONTEND_PORT" &
   frontend_pid=$!
+}
+
+# Reads and clears the pending request in one step, so a slow restart cannot
+# replay the same request on the next pass.
+take_request() {
+  [[ -f "$REQUEST_FILE" ]] || return 0
+  local request
+  request="$(tr -d '[:space:]' < "$REQUEST_FILE" 2>/dev/null || true)"
+  rm -f "$REQUEST_FILE"
+  printf '%s' "$request"
+}
+
+restart_servers() {
+  log "Restart requested from the dashboard."
+  stop_servers
+  wait_for_ports_free || return 1
+  start_backend
+  wait_for_backend || return 1
+  start_frontend
+  log "Restarted. Dashboard running at http://localhost:$FRONTEND_PORT"
+}
+
+# Watches both servers and the dashboard's control file until something asks to
+# stop, or a server dies on its own.
+supervise() {
+  while true; do
+    case "$(take_request)" in
+      restart)
+        restart_servers || return 1
+        ;;
+      shutdown)
+        log "Shutdown requested from the dashboard."
+        return 0
+        ;;
+      "")
+        ;;
+      *)
+        warn "Ignoring unrecognized control request."
+        ;;
+    esac
+
+    if ! is_running "$backend_pid" || ! is_running "$frontend_pid"; then
+      warn "A server stopped unexpectedly."
+      return 1
+    fi
+
+    # Polled rather than `wait -n`, which macOS's stock bash 3.2 does not support.
+    sleep 1
+  done
 }
 
 main() {
@@ -153,23 +232,24 @@ main() {
   trap 'cleanup; exit 0' INT TERM
   trap cleanup EXIT
 
+  # A request left behind by a previous run would fire immediately otherwise.
+  mkdir -p "$RUN_DIR"
+  rm -f "$REQUEST_FILE"
+  echo "$$" > "$SUPERVISOR_PID_FILE"
+
   start_backend
-  wait_for_backend
+  wait_for_backend || die "Backend failed to start."
   start_frontend
 
   echo
   log "Dashboard running at http://localhost:$FRONTEND_PORT"
   warn "Add your Gemini API key in the UI: https://aistudio.google.com/apikey"
-  log "Press Ctrl+C to stop both servers."
+  log "Press Ctrl+C to stop both servers, or use the buttons in the dashboard header."
   echo
 
-  # Exit as soon as either server dies so we never leave a half-running stack.
-  # Polled rather than `wait -n`, which macOS's stock bash 3.2 does not support.
-  while kill -0 "$backend_pid" 2>/dev/null && kill -0 "$frontend_pid" 2>/dev/null; do
-    sleep 1
-  done
-  warn "A server stopped unexpectedly."
-  exit 1
+  # Exits as soon as either server dies so we never leave a half-running stack.
+  supervise || exit 1
+  exit 0
 }
 
 main "$@"
