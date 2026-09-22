@@ -17,6 +17,24 @@ export default function ResultsStep({
 }: ResultsStepProps) {
   const [showDiff, setShowDiff] = useState(false);
 
+  /** Saves the improved SKILL.md straight from the page, with no backend. */
+  const saveImprovedSkillFromPage = () => {
+    const markdown = result?.improved_skill_md;
+    if (!markdown) return false;
+
+    const url = window.URL.createObjectURL(
+      new Blob([markdown], { type: "text/markdown" })
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "SKILL.md";
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    return true;
+  };
+
   const handleDownload = async () => {
     try {
       const response = await fetch(
@@ -37,6 +55,10 @@ export default function ResultsStep({
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (error) {
+      // The zip is built from the backend's session. If the backend restarted,
+      // that session is gone — but this page still holds the improved skill, so
+      // save that rather than lose a run that took an hour.
+      if (saveImprovedSkillFromPage()) return;
       alert("Download failed. Please try again.");
     }
   };
