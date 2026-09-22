@@ -16,7 +16,8 @@ import re
 import logging
 import traceback
 from adk_optimizer import SkillOptimizer
-from config import has_env_key, load_env_file, resolve_api_key
+from config import load_env_file
+from model_provider import describe_provider, resolve_provider
 from service_control import (
     VALID_ACTIONS,
     is_supervised,
@@ -271,12 +272,12 @@ async def analyze_skill(request: AnalyzeRequest):
         raise HTTPException(status_code=404, detail="Session not found")
     session = sessions[request.session_id]
 
-    api_key = resolve_api_key(request.gemini_api_key)
-    if not api_key:
-        raise HTTPException(status_code=400, detail="No Gemini API key. Add GOOGLE_API_KEY to backend/.env (see .env.example) or enter a key in the app.")
+    provider = resolve_provider(request.gemini_api_key)
+    if provider is None:
+        raise HTTPException(status_code=400, detail="No model provider configured. Add GOOGLE_API_KEY or OLLAMA_API_KEY to backend/.env (see .env.example), or enter a Gemini key in the app.")
 
     try:
-        optimizer = SkillOptimizer(api_key=api_key)
+        optimizer = SkillOptimizer(api_key=provider.api_key, provider=provider)
         analysis = await optimizer.analyze_skill(session["skill_files"])
         session["scenarios"] = analysis["scenarios"]
         session["evals"] = analysis["evals"]
@@ -347,9 +348,9 @@ async def start_optimization(session_id: str, request: StartRequest):
     if session.get("status") == "running":
         raise HTTPException(status_code=400, detail="Optimization already running")
 
-    gemini_key = resolve_api_key(request.gemini_api_key)
-    if not gemini_key:
-        raise HTTPException(status_code=400, detail="No Gemini API key. Add GOOGLE_API_KEY to backend/.env (see .env.example) or enter a key in the app.")
+    provider = resolve_provider(request.gemini_api_key)
+    if provider is None:
+        raise HTTPException(status_code=400, detail="No model provider configured. Add GOOGLE_API_KEY or OLLAMA_API_KEY to backend/.env (see .env.example), or enter a Gemini key in the app.")
 
     session["status"] = "running"
     session["stop_requested"] = False
@@ -359,7 +360,7 @@ async def start_optimization(session_id: str, request: StartRequest):
 
     async def run_optimization():
         logger.info(f"Starting optimization for session {session_id}")
-        optimizer = SkillOptimizer(api_key=gemini_key)
+        optimizer = SkillOptimizer(api_key=provider.api_key, provider=provider)
 
         async def callback(event):
             logger.info(f"Callback event: {event['type']}")
@@ -600,8 +601,8 @@ async def health_check():
 
 @app.get("/api/config")
 async def get_config():
-    """Lets the UI skip the API key prompt when backend/.env already has one."""
-    return {"has_env_key": has_env_key()}
+    """Lets the UI skip the key prompt, and name the model that will run."""
+    return describe_provider()
 
 
 @app.get("/api/service")

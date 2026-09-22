@@ -21,6 +21,8 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [hasEnvKey, setHasEnvKey] = useState(false);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [fileList, setFileList] = useState<string[]>([]);
@@ -32,7 +34,10 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
     fetch(`${API_BASE}/api/config`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (active && data) setHasEnvKey(Boolean(data.has_env_key));
+        if (!active || !data) return;
+        setHasEnvKey(Boolean(data.has_env_key));
+        setProvider(data.provider ?? null);
+        setModel(data.model ?? null);
       })
       .catch(() => {
         // Backend unreachable: fall back to asking for a key. BackendStatus
@@ -278,6 +283,8 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
               value={apiKey}
               onChange={setApiKey}
               hasEnvKey={hasEnvKey}
+              provider={provider}
+              model={model}
             />
           </div>
 
@@ -406,6 +413,8 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
                 value={apiKey}
                 onChange={setApiKey}
                 hasEnvKey={hasEnvKey}
+                provider={provider}
+                model={model}
                 showHint={false}
               />
             </div>
