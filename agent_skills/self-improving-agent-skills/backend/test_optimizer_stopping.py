@@ -25,6 +25,7 @@ class StubOptimizer(SkillOptimizer):
         super().__init__(api_key="stub-key")
         self._pass_rates = list(pass_rates)
         self.rounds_run = 0
+        self.on_round = None
 
     def _score(self, pct):
         passed = int(pct)
@@ -42,20 +43,26 @@ class StubOptimizer(SkillOptimizer):
 
     async def _analyze_failures(self, *args, **kwargs):
         self.rounds_run += 1
+        if self.on_round:
+            self.on_round(self.rounds_run)
         return {"diagnosis": "d", "mutation_strategy": "add_constraint"}
 
     async def _mutate_skill(self, *args, **kwargs):
         return {"new_skill_md": "# mutated", "description": "change"}
 
 
-def run(pass_rates):
+def run(pass_rates, should_stop=None):
     opt = StubOptimizer(pass_rates)
+    kwargs = {}
+    if should_stop is not None:
+        kwargs["should_stop"] = should_stop
     result = asyncio.run(
         opt.optimize(
             skill_files=SKILL_FILES,
             scenarios=SCENARIOS,
             evals=EVALS,
             max_rounds=MAX_ROUNDS,
+            **kwargs,
         )
     )
     return opt, result
@@ -88,8 +95,46 @@ def test_uses_all_rounds_when_target_is_never_reached():
     )
 
 
+def test_honours_stop_signal_before_any_round():
+    opt, result = run([50], should_stop=lambda: True)
+    assert opt.rounds_run == 0, (
+        f"ran {opt.rounds_run} rounds despite the stop signal being set "
+        "before the first round; expected 0"
+    )
+    assert result["stop_reason"] == "stopped", (
+        f"stop_reason was {result['stop_reason']!r}, expected 'stopped'"
+    )
+
+
+def test_honours_stop_signal_raised_mid_run():
+    state = {"rounds_seen": 0}
+
+    def should_stop():
+        # Stop once the first round has started.
+        return state["rounds_seen"] >= 1
+
+    opt = StubOptimizer([50, 55, 60])
+    opt.on_round = lambda n: state.__setitem__("rounds_seen", n)
+    result = asyncio.run(
+        opt.optimize(
+            skill_files=SKILL_FILES,
+            scenarios=SCENARIOS,
+            evals=EVALS,
+            max_rounds=MAX_ROUNDS,
+            should_stop=should_stop,
+        )
+    )
+    # The optimizer checks the signal each round, so it must not run all of them.
+    assert opt.rounds_run < MAX_ROUNDS, (
+        f"ran all {opt.rounds_run} rounds; the stop signal was never honoured"
+    )
+    assert result["stop_reason"] == "stopped"
+
+
 def main():
     tests = [
+        test_honours_stop_signal_before_any_round,
+        test_honours_stop_signal_raised_mid_run,
         test_stops_immediately_when_baseline_is_perfect,
         test_stops_as_soon_as_target_is_reached,
         test_uses_all_rounds_when_target_is_never_reached,

@@ -93,6 +93,7 @@ export default function Home() {
               scenarios={scenarios}
               evals={evals}
               onComplete={handleOptimizationComplete}
+              onStop={handleStartOver}
             />
           )}
 

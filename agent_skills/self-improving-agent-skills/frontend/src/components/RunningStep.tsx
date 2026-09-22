@@ -10,6 +10,7 @@ interface RunningStepProps {
   scenarios: any[];
   evals: any[];
   onComplete: (result: any) => void;
+  onStop: () => void;
 }
 
 interface Experiment {
@@ -28,6 +29,7 @@ export default function RunningStep({
   scenarios,
   evals,
   onComplete,
+  onStop,
 }: RunningStepProps) {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [currentScore, setCurrentScore] = useState(0);
@@ -123,14 +125,18 @@ export default function RunningStep({
   };
 
   const handleStop = async () => {
+    const API_BASE2 = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8891";
     try {
-      const API_BASE2 = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8891";
       await fetch(`${API_BASE2}/api/stop/${sessionId}`, {
         method: "POST",
       });
-      setIsRunning(false);
     } catch (error) {
-      alert("Failed to stop optimization");
+      // The run is being abandoned either way, so a failed stop call must not
+      // strand the user on the running screen.
+      console.error("Failed to stop optimization", error);
+    } finally {
+      setIsRunning(false);
+      onStop();
     }
   };
 

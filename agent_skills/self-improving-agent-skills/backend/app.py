@@ -402,6 +402,7 @@ async def start_optimization(session_id: str, request: StartRequest):
                 evals=session["evals"],
                 max_rounds=request.max_rounds,
                 target_pass_rate=request.target_pass_rate,
+                should_stop=lambda: session.get("stop_requested", False),
                 callback=callback,
             )
             logger.info(

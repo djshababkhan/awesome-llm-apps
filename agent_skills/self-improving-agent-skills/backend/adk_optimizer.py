@@ -49,6 +49,8 @@ class SkillOptimizer:
         self.model = model
         self._session_service = InMemorySessionService()
         self._call_id = 0
+        # Replaced per-run by optimize(); see the should_stop parameter.
+        self._should_stop = lambda: False
 
         self.executor = Agent(
             name="executor",
@@ -168,9 +170,12 @@ class SkillOptimizer:
         evals: list,
         max_rounds: int = 5,
         target_pass_rate: float = 100.0,
+        should_stop: Optional[Callable[[], bool]] = None,
         callback: Optional[Callable] = None,
     ) -> dict:
         """Run the optimization loop with 3 ADK agents."""
+
+        self._should_stop = should_stop or (lambda: False)
 
         async def emit(event):
             if callback:
@@ -202,11 +207,16 @@ class SkillOptimizer:
         # A skill that already meets the target needs no mutation; continuing
         # only burns API calls and risks regressing a passing skill.
         stop_reason = "max_rounds"
-        if baseline_pct >= target_pass_rate:
+        if self._should_stop():
+            stop_reason = "stopped"
+        elif baseline_pct >= target_pass_rate:
             stop_reason = "target_reached"
 
         for rnd in range(1, max_rounds + 1):
-            if stop_reason == "target_reached":
+            if stop_reason != "max_rounds":
+                break
+            if self._should_stop():
+                stop_reason = "stopped"
                 break
 
             await emit({"type": "experiment_start", "data": {"round": rnd}})
@@ -222,6 +232,9 @@ class SkillOptimizer:
 
             # Re-score
             result = await self._score_skill(new_md, scenarios, evals)
+            if self._should_stop():
+                stop_reason = "stopped"
+                break
             new_pct = round(100 * result["passed"] / max(result["total"], 1), 1)
 
             kept = new_pct > baseline_pct
@@ -295,6 +308,8 @@ class SkillOptimizer:
         per_eval = {e["id"]: {"passed": 0, "total": 0} for e in evals}
 
         for sc in scenarios:
+            if self._should_stop():
+                break
             # Executor runs the skill (free-form text)
             output = await self._ask(
                 self.executor,
