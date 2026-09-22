@@ -36,6 +36,16 @@ class ProviderConfig:
     # Only set for OpenAI-compatible hosts; Gemini talks to Google directly.
     api_base: Optional[str] = None
 
+    @property
+    def enforces_response_schema(self) -> bool:
+        """Whether the endpoint actually honours a requested output schema.
+
+        Gemini does. Ollama Cloud accepts an OpenAI response_format and then
+        answers in prose anyway, so callers there have to ask for JSON in the
+        prompt the model reads.
+        """
+        return self.name == GEMINI
+
 
 def _env(name: str) -> Optional[str]:
     return clean_value(os.environ.get(name))

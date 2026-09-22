@@ -139,14 +139,38 @@ class SkillOptimizer:
             new_message=types.Content(parts=[types.Part(text=prompt)]),
         ):
             if hasattr(event, "content") and event.content:
-                for part in event.content.parts or []:
-                    if hasattr(part, "text") and part.text:
-                        text += part.text
+                text += self._visible_text(event.content.parts)
         return text
+
+    @staticmethod
+    def _visible_text(parts) -> str:
+        """The answer, without a reasoning model's private thinking.
+
+        Models such as kimi-k3 return their chain of thought as parts marked
+        thought=True. Folding those into the answer leaves prose wrapped around
+        the JSON the callers are about to parse.
+        """
+        return "".join(
+            part.text
+            for part in parts or []
+            if getattr(part, "text", None) and not getattr(part, "thought", False)
+        )
+
+    def _json_instruction(self, agent) -> str:
+        """Spells out the schema when the endpoint will not enforce it itself."""
+        schema = getattr(agent, "output_schema", None)
+        if schema is None or self._provider.enforces_response_schema:
+            return ""
+
+        return (
+            "\n\nReturn ONLY a JSON object matching this schema. No prose, no "
+            "explanation, no markdown code fences.\n"
+            + json.dumps(schema.model_json_schema())
+        )
 
     async def _ask_json(self, agent: Agent, prompt: str, fallback=None):
         """Run an ADK agent and parse the JSON response."""
-        text = await self._ask(agent, prompt)
+        text = await self._ask(agent, prompt + self._json_instruction(agent))
         try:
             return json.loads(text)
         except json.JSONDecodeError:
