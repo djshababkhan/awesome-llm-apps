@@ -140,8 +140,6 @@ class SkillOptimizer:
 
     async def analyze_skill(self, skill_files: dict) -> dict:
         """Generate test scenarios and eval criteria from skill files."""
-        self._emit = emit
-
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
         )
@@ -185,6 +183,9 @@ class SkillOptimizer:
         async def emit(event):
             if callback:
                 await callback(event)
+
+        # Lets the long-running helpers report progress through _progress().
+        self._emit = emit
 
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
