@@ -17,6 +17,12 @@ import logging
 import traceback
 from adk_optimizer import SkillOptimizer
 from config import has_env_key, load_env_file, resolve_api_key
+from service_control import (
+    VALID_ACTIONS,
+    is_supervised,
+    pending_request,
+    request_action,
+)
 
 load_env_file()
 from contextlib import asynccontextmanager
@@ -596,6 +602,41 @@ async def health_check():
 async def get_config():
     """Lets the UI skip the API key prompt when backend/.env already has one."""
     return {"has_env_key": has_env_key()}
+
+
+@app.get("/api/service")
+async def get_service_state():
+    """Tells the UI whether a start.sh supervisor can act on control requests."""
+    return {"supervised": is_supervised(), "pending": pending_request()}
+
+
+@app.post("/api/service/{action}")
+async def control_service(action: str):
+    """Queues a restart or shutdown of both servers for the supervisor to run.
+
+    The request only gets queued here; start.sh cycles the processes, since this
+    one is about to be replaced by it.
+    """
+    if action not in VALID_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown action '{action}'. Expected one of: {', '.join(VALID_ACTIONS)}.",
+        )
+    if not is_supervised():
+        raise HTTPException(
+            status_code=409,
+            detail="No supervisor is running, so the servers cannot be controlled "
+                   "from here. Start the dashboard with ./start.sh to enable this.",
+        )
+
+    try:
+        request_action(action)
+    except OSError as exc:
+        logger.error(f"Could not queue service {action}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Could not queue {action}: {exc}")
+
+    logger.info(f"Queued service {action} for the supervisor.")
+    return {"status": "accepted", "action": action}
 
 
 

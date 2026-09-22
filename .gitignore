@@ -19,3 +19,6 @@ dist/
 
 # JetBrains IDEs
 .idea/
+
+# Runtime state from start.sh (supervisor pid, control requests)
+.run/
