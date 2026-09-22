@@ -110,6 +110,27 @@ BACKEND_PORT=8892 FRONTEND_PORT=3001 ./start.sh  # run on different ports
 Requires Python 3.10+ and Node.js 18+. On Windows, use Git Bash or WSL, or follow the
 manual steps below.
 
+### Run on Ollama Cloud instead of Gemini
+
+The optimizer makes a long chain of model calls, so the model decides both how
+long a run takes and how good the rewrites are. Point it at a larger model
+hosted on [Ollama Cloud](https://ollama.com) by adding one key:
+
+```bash
+cd backend
+# in .env
+OLLAMA_API_KEY=your-key-from-https://ollama.com/settings/keys
+OLLAMA_MODEL=kimi-k3      # optional; any tag from https://ollama.com/search?c=cloud
+```
+
+`OLLAMA_API_KEY` takes precedence over `GOOGLE_API_KEY`, so the switch is one
+line and reversible by commenting it out. All three ADK agents move over
+together, through Ollama's OpenAI-compatible endpoint. Remove the key to go back
+to Gemini; a key pasted into the UI is still treated as a Gemini key and wins for
+that request.
+
+The dashboard names whichever model is running where it used to ask for a key.
+
 ### Manual Setup
 
 Prefer to run the two servers yourself? Start them in separate terminals.
