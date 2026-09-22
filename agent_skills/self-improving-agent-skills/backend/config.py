@@ -20,8 +20,8 @@ def load_env_file() -> None:
     load_dotenv(ENV_FILE, override=False)
 
 
-def _clean(value: Optional[str]) -> Optional[str]:
-    """Normalizes a key, treating blank or whitespace-only values as absent."""
+def clean_value(value: Optional[str]) -> Optional[str]:
+    """Normalizes a setting, treating blank or whitespace-only values as absent."""
     if not value:
         return None
     stripped = value.strip()
@@ -30,9 +30,9 @@ def _clean(value: Optional[str]) -> Optional[str]:
 
 def has_env_key() -> bool:
     """Whether a usable key is configured in the environment."""
-    return _clean(os.environ.get(ENV_KEY_NAME)) is not None
+    return clean_value(os.environ.get(ENV_KEY_NAME)) is not None
 
 
 def resolve_api_key(request_key: Optional[str]) -> Optional[str]:
     """The key to use for a request, or None when none is configured anywhere."""
-    return _clean(request_key) or _clean(os.environ.get(ENV_KEY_NAME))
+    return clean_value(request_key) or clean_value(os.environ.get(ENV_KEY_NAME))

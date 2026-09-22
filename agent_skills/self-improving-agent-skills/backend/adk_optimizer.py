@@ -6,6 +6,7 @@
   Mutator: makes one targeted fix per round
 """
 
+import asyncio
 import json
 from typing import Callable, List, Optional
 
@@ -14,9 +15,15 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.adk.agents import Agent
 from google.adk.models import Gemini
+from model_provider import DEFAULT_GEMINI_MODEL, GEMINI, OLLAMA, ProviderConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+
+# Scenarios are scored in parallel, but not without limit: a large skill would
+# otherwise open a request per scenario at once and hit provider rate limits.
+MAX_CONCURRENT_SCENARIOS = 4
 
 
 # -- Pydantic schemas for structured agent output ----------------------------
@@ -41,12 +48,19 @@ class SkillMutation(BaseModel):
 
 
 class SkillOptimizer:
-    def __init__(self, api_key: str, model: str = "gemini-3-flash-preview"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_GEMINI_MODEL,
+        provider: Optional[ProviderConfig] = None,
+    ):
         # The credential is held on this instance rather than in os.environ. The
         # backend builds one optimizer per request, and a process-global key
         # would let concurrent runs overwrite each other's credentials.
-        self._client = genai.Client(api_key=api_key)
-        self.model = model
+        self._provider = provider or ProviderConfig(
+            name=GEMINI, model=model, api_key=api_key
+        )
+        self.model = self._provider.model
         self._session_service = InMemorySessionService()
         self._call_id = 0
         # Replaced per-run by optimize(); see the should_stop parameter.
@@ -57,7 +71,7 @@ class SkillOptimizer:
 
         self.executor = Agent(
             name="executor",
-            model=Gemini(model=model, client=self._client),
+            model=self._build_model(),
             instruction=(
                 "You are a versatile skill execution agent. You have three modes:\n\n"
                 "1. EXECUTE MODE: Given a skill's instructions and a user request, "
@@ -71,7 +85,7 @@ class SkillOptimizer:
         )
         self.analyst = Agent(
             name="analyst",
-            model=Gemini(model=model, client=self._client),
+            model=self._build_model(),
             instruction=(
                 "You diagnose why agent skill evaluations fail. "
                 "Given failed eval results, identify the root cause and suggest "
@@ -82,13 +96,34 @@ class SkillOptimizer:
         )
         self.mutator = Agent(
             name="mutator",
-            model=Gemini(model=model, client=self._client),
+            model=self._build_model(),
             instruction=(
                 "You edit agent skill files. Given a SKILL.md and a diagnosis, "
                 "make exactly ONE targeted change. Keep the YAML frontmatter and "
                 "overall structure intact. Return the complete updated SKILL.md."
             ),
             output_schema=SkillMutation,
+        )
+
+    def _build_model(self):
+        """A fresh model object for one agent, for whichever provider is configured.
+
+        Ollama Cloud speaks the OpenAI protocol, which ADK reaches through
+        LiteLLM. The import is local so a Gemini-only install does not need
+        litellm at all.
+        """
+        if self._provider.name == OLLAMA:
+            from google.adk.models.lite_llm import LiteLlm
+
+            return LiteLlm(
+                model=f"openai/{self._provider.model}",
+                api_base=self._provider.api_base,
+                api_key=self._provider.api_key,
+            )
+
+        return Gemini(
+            model=self._provider.model,
+            client=genai.Client(api_key=self._provider.api_key),
         )
 
     # -- Agent runner helpers ------------------------------------------------
@@ -110,14 +145,38 @@ class SkillOptimizer:
             new_message=types.Content(parts=[types.Part(text=prompt)]),
         ):
             if hasattr(event, "content") and event.content:
-                for part in event.content.parts or []:
-                    if hasattr(part, "text") and part.text:
-                        text += part.text
+                text += self._visible_text(event.content.parts)
         return text
+
+    @staticmethod
+    def _visible_text(parts) -> str:
+        """The answer, without a reasoning model's private thinking.
+
+        Models such as kimi-k3 return their chain of thought as parts marked
+        thought=True. Folding those into the answer leaves prose wrapped around
+        the JSON the callers are about to parse.
+        """
+        return "".join(
+            part.text
+            for part in parts or []
+            if getattr(part, "text", None) and not getattr(part, "thought", False)
+        )
+
+    def _json_instruction(self, agent) -> str:
+        """Spells out the schema when the endpoint will not enforce it itself."""
+        schema = getattr(agent, "output_schema", None)
+        if schema is None or self._provider.enforces_response_schema:
+            return ""
+
+        return (
+            "\n\nReturn ONLY a JSON object matching this schema. No prose, no "
+            "explanation, no markdown code fences.\n"
+            + json.dumps(schema.model_json_schema())
+        )
 
     async def _ask_json(self, agent: Agent, prompt: str, fallback=None):
         """Run an ADK agent and parse the JSON response."""
-        text = await self._ask(agent, prompt)
+        text = await self._ask(agent, prompt + self._json_instruction(agent))
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -140,8 +199,6 @@ class SkillOptimizer:
 
     async def analyze_skill(self, skill_files: dict) -> dict:
         """Generate test scenarios and eval criteria from skill files."""
-        self._emit = emit
-
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
         )
@@ -185,6 +242,9 @@ class SkillOptimizer:
         async def emit(event):
             if callback:
                 await callback(event)
+
+        # Lets the long-running helpers report progress through _progress().
+        self._emit = emit
 
         skill_md = next(
             (v for k, v in skill_files.items() if k.endswith("SKILL.md")), ""
@@ -315,49 +375,32 @@ class SkillOptimizer:
             await self._emit({"type": "progress", "data": {"phase": phase, **data}})
 
     async def _score_skill(self, skill_md, scenarios, evals):
-        """Executor runs all scenarios, then scores outputs."""
+        """Executor runs every scenario, then scores the outputs.
+
+        Scenarios are independent, so they run concurrently: a round otherwise
+        waits for two model calls per scenario in series, which is the bulk of
+        a run's wall-clock time.
+        """
+        limit = asyncio.Semaphore(MAX_CONCURRENT_SCENARIOS)
+
+        async def run(index, sc):
+            async with limit:
+                return await self._score_scenario(
+                    skill_md, sc, index, len(scenarios), evals
+                )
+
+        scored = await asyncio.gather(
+            *(run(index, sc) for index, sc in enumerate(scenarios, start=1))
+        )
+
         all_results = []
         total_passed = 0
         total_checks = 0
         per_eval = {e["id"]: {"passed": 0, "total": 0} for e in evals}
 
-        for index, sc in enumerate(scenarios, start=1):
-            if self._should_stop():
-                break
-
-            await self._progress(
-                "executing",
-                scenario_index=index,
-                scenario_total=len(scenarios),
-                scenario_name=sc.get("name", f"Scenario {index}"),
-            )
-
-            # Executor runs the skill (free-form text)
-            output = await self._ask(
-                self.executor,
-                f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
-            )
-            await self._progress(
-                "scoring",
-                scenario_index=index,
-                scenario_total=len(scenarios),
-                scenario_name=sc.get("name", f"Scenario {index}"),
-            )
-
-            # Executor scores the output (JSON)
-            scoring = await self._ask_json(
-                self.executor,
-                (
-                    f"Evaluate this output against the criteria.\n\n"
-                    f"Input: {sc['input']}\n\n"
-                    f"Output: {output}\n\n"
-                    f"Criteria:\n{json.dumps(evals, indent=2)}\n\n"
-                    f"Return JSON: {{\"results\": [{{\"eval_id\": 1, \"passed\": true, \"reason\": \"...\"}}]}}"
-                ),
-                fallback={"results": []},
-            )
-            scores = scoring.get("results", []) if isinstance(scoring, dict) else scoring
-
+        # Aggregated in scenario order, not completion order, so a run's details
+        # read the same however the calls happened to interleave.
+        for sc, scores in zip(scenarios, scored):
             for s in scores:
                 eid = s.get("eval_id")
                 passed = s.get("passed", False)
@@ -379,6 +422,43 @@ class SkillOptimizer:
             ],
             "details": all_results,
         }
+
+    async def _score_scenario(self, skill_md, sc, index, total, evals):
+        """Runs one scenario and scores its output, returning the raw scores."""
+        if self._should_stop():
+            return []
+
+        name = sc.get("name", f"Scenario {index}")
+        await self._progress(
+            "executing", scenario_index=index, scenario_total=total, scenario_name=name
+        )
+
+        # Executor runs the skill (free-form text)
+        output = await self._ask(
+            self.executor,
+            f"Execute this skill:\n\n{skill_md}\n\nUser request:\n{sc['input']}",
+        )
+
+        if self._should_stop():
+            return []
+
+        await self._progress(
+            "scoring", scenario_index=index, scenario_total=total, scenario_name=name
+        )
+
+        # Executor scores the output (JSON)
+        scoring = await self._ask_json(
+            self.executor,
+            (
+                f"Evaluate this output against the criteria.\n\n"
+                f"Input: {sc['input']}\n\n"
+                f"Output: {output}\n\n"
+                f"Criteria:\n{json.dumps(evals, indent=2)}\n\n"
+                f"Return JSON: {{\"results\": [{{\"eval_id\": 1, \"passed\": true, \"reason\": \"...\"}}]}}"
+            ),
+            fallback={"results": []},
+        )
+        return scoring.get("results", []) if isinstance(scoring, dict) else scoring
 
     async def _analyze_failures(self, skill_md, scenarios, evals, details):
         """Analyst agent diagnoses the worst failures."""

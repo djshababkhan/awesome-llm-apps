@@ -7,6 +7,10 @@ interface ApiKeyFieldProps {
   onChange: (value: string) => void;
   /** True once the backend reports a key in backend/.env. */
   hasEnvKey: boolean;
+  /** Which provider the backend resolved: "gemini", "ollama", or null. */
+  provider?: string | null;
+  /** The model that will run, as the backend reports it. */
+  model?: string | null;
   showHint?: boolean;
 }
 
@@ -18,19 +22,25 @@ export default function ApiKeyField({
   value,
   onChange,
   hasEnvKey,
+  provider = null,
+  model = null,
   showHint = true,
 }: ApiKeyFieldProps) {
   if (hasEnvKey) {
+    const isOllama = provider === "ollama";
+    const title = isOllama
+      ? "Running on Ollama Cloud"
+      : "API key loaded from backend/.env";
+    const detail = isOllama
+      ? `${model ?? "Model"} — set OLLAMA_MODEL in backend/.env to change it.`
+      : "Nothing to enter. Edit that file to use a different key.";
+
     return (
       <div className="flex items-start gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
         <div>
-          <p className="text-sm font-medium text-emerald-400">
-            API key loaded from backend/.env
-          </p>
-          <p className="mt-0.5 text-xs text-zinc-400">
-            Nothing to enter. Edit that file to use a different key.
-          </p>
+          <p className="text-sm font-medium text-emerald-400">{title}</p>
+          <p className="mt-0.5 text-xs text-zinc-400">{detail}</p>
         </div>
       </div>
     );
