@@ -19,6 +19,7 @@ from adk_optimizer import SkillOptimizer
 from config import load_env_file
 from model_provider import describe_provider, resolve_provider
 from session_store import forget_session, load_sessions, save_session
+from skill_library import find_saved_skill, list_saved_skills, save_skill
 from service_control import (
     VALID_ACTIONS,
     is_supervised,
@@ -184,6 +185,26 @@ def _is_safe_path(name: str) -> bool:
     return ".." not in name and not os.path.isabs(name)
 
 
+REPO_SKILLS_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _repo_skill_names() -> set:
+    """Folder names of the skills that ship with the repository."""
+    if not os.path.isdir(REPO_SKILLS_DIR):
+        return set()
+    return {
+        name for name in os.listdir(REPO_SKILLS_DIR)
+        if os.path.isfile(os.path.join(REPO_SKILLS_DIR, name, "SKILL.md"))
+    }
+
+
+def _create_and_keep_session(skill_files: dict, file_list: list) -> dict:
+    """Starts a session for an upload and keeps the skill for the dashboard list."""
+    result = create_session_from_files(skill_files, file_list)
+    save_skill(skill_files, result["metadata"], reserved=_repo_skill_names())
+    return result
+
+
 @app.post("/api/upload")
 async def upload_skill(file: UploadFile = File(...)):
     """Accept zip file or multiple files, extract, return file list + parsed SKILL.md metadata"""
@@ -223,7 +244,7 @@ async def upload_skill(file: UploadFile = File(...)):
                     skill_files = {os.path.relpath(k, common): v for k, v in skill_files.items()}
                     file_list = [os.path.relpath(f, common) for f in file_list]
 
-            return create_session_from_files(skill_files, file_list)
+            return _create_and_keep_session(skill_files, file_list)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid zip file")
     except HTTPException:
@@ -268,7 +289,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
             skill_files = {os.path.relpath(k, common): v for k, v in skill_files.items()}
             file_list = [os.path.relpath(f, common) for f in file_list]
 
-    return create_session_from_files(skill_files, file_list)
+    return _create_and_keep_session(skill_files, file_list)
 
 
 @app.post("/api/analyze")
@@ -526,54 +547,58 @@ async def cleanup_temp_dir(temp_dir: str):
         pass
 
 
+def _describe_skill(skill_dir: str, name: str, source: str) -> dict:
+    """The card the dashboard shows for one skill folder."""
+    with open(os.path.join(skill_dir, "SKILL.md"), "r", encoding="utf-8") as f:
+        metadata = parse_skill_frontmatter(f.read())
+
+    file_count = sum(len(files) for _, _, files in os.walk(skill_dir))
+    return {
+        "id": name,
+        "name": metadata.get("name", name),
+        "description": metadata.get("description", ""),
+        "path": name,
+        "metadata": metadata,
+        "file_count": file_count,
+        "has_scripts": os.path.exists(os.path.join(skill_dir, "scripts")),
+        "has_references": os.path.exists(os.path.join(skill_dir, "references")),
+        "has_evals": os.path.exists(os.path.join(REPO_SKILLS_DIR, "evals", name)),
+        "is_self_improving": name == "self-improving-agent-skills",
+        "source": source,
+    }
+
+
 @app.get("/api/examples")
 async def list_examples():
-    """List all agent skills available in the repository with full metadata and status"""
-    skills_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    examples = []
-    if os.path.exists(skills_dir):
-        for name in sorted(os.listdir(skills_dir)):
-            skill_dir = os.path.join(skills_dir, name)
-            skill_md_path = os.path.join(skill_dir, "SKILL.md")
-            if os.path.isdir(skill_dir) and os.path.exists(skill_md_path):
-                with open(skill_md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                metadata = parse_skill_frontmatter(content)
-
-                # Collect files in skill directory
-                file_count = 0
-                has_scripts = os.path.exists(os.path.join(skill_dir, "scripts"))
-                has_references = os.path.exists(os.path.join(skill_dir, "references"))
-                has_evals = os.path.exists(os.path.join(skills_dir, "evals", name))
-
-                for _, _, files in os.walk(skill_dir):
-                    file_count += len(files)
-
-                examples.append({
-                    "id": name,
-                    "name": metadata.get("name", name),
-                    "description": metadata.get("description", ""),
-                    "path": name,
-                    "metadata": metadata,
-                    "file_count": file_count,
-                    "has_scripts": has_scripts,
-                    "has_references": has_references,
-                    "has_evals": has_evals,
-                    "is_self_improving": name == "self-improving-agent-skills"
-                })
+    """List the repository's agent skills, then the ones uploaded through the dashboard"""
+    repo_names = _repo_skill_names()
+    examples = [
+        _describe_skill(os.path.join(REPO_SKILLS_DIR, name), name, "repository")
+        for name in sorted(repo_names)
+    ]
+    examples += [
+        _describe_skill(str(folder), folder.name, "uploaded")
+        for folder in list_saved_skills()
+        if folder.name not in repo_names
+    ]
     return {"examples": examples}
+
+
+def _find_skill_dir(example_name: str) -> Optional[str]:
+    """A repository skill's folder, else an uploaded one's, else None."""
+    if example_name in _repo_skill_names():
+        return os.path.join(REPO_SKILLS_DIR, example_name)
+    saved = find_saved_skill(example_name)
+    return str(saved) if saved else None
 
 
 @app.post("/api/examples/{example_name}/load")
 async def load_example(example_name: str):
-    """Load an example skill as if it were uploaded"""
+    """Load a listed skill as if it were uploaded"""
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", example_name):
         raise HTTPException(status_code=400, detail="Invalid example name")
-    examples_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    skill_dir = os.path.realpath(os.path.join(examples_dir, example_name))
-    if not skill_dir.startswith(examples_dir + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid example name")
-    if not os.path.isdir(skill_dir):
+    skill_dir = _find_skill_dir(example_name)
+    if skill_dir is None:
         raise HTTPException(status_code=404, detail="Example skill not found")
     skill_files = {}
     file_list = []

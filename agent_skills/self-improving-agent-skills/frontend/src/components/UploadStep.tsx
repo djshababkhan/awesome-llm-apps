@@ -354,6 +354,11 @@ export default function UploadStep({ onComplete }: UploadStepProps) {
                               <BookOpen className="w-3 h-3" /> Refs
                             </span>
                           )}
+                          {skill.source === "uploaded" && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-400 rounded border border-amber-500/20">
+                              <Upload className="w-3 h-3" /> Uploaded
+                            </span>
+                          )}
                         </div>
 
                         <button
